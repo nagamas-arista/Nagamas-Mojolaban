@@ -174,11 +174,55 @@
     const source = new TextDecoder().decode(bytes);
     const match = source.match(/window\.NAGAMAS_PRODUCTS\s*=\s*([\s\S]*?);\s*$/);
     if (!match) throw new Error('File products.js tidak memiliki format katalog yang dikenal.');
-    const parsed = JSON.parse(match[1]);
+    let parsed;
+    try {
+      parsed = JSON.parse(match[1]);
+    } catch (jsonError) {
+      // Katalog versi awal memakai object literal JavaScript (single quotes dan key tanpa kutip).
+      parsed = JSON.parse(legacyCatalogToJson(match[1]));
+    }
     if (!Array.isArray(parsed) || parsed.some((series) => !series.title || !Array.isArray(series.variants))) {
       throw new Error('Isi katalog di GitHub tidak valid.');
     }
     return parsed;
+  }
+
+  function legacyCatalogToJson(value) {
+    let output = '';
+    let inSingleQuote = false;
+    let escaped = false;
+    for (let index = 0; index < value.length; index += 1) {
+      const character = value[index];
+      if (!inSingleQuote) {
+        if (character === "'") {
+          inSingleQuote = true;
+          output += '"';
+        } else {
+          output += character;
+        }
+        continue;
+      }
+      if (escaped) {
+        if (character === "'") output += "'";
+        else if (character === '"') output += '\\"';
+        else if (character === '\\') output += '\\\\';
+        else output += `\\${character}`;
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === "'") {
+        inSingleQuote = false;
+        output += '"';
+      } else if (character === '"') {
+        output += '\\"';
+      } else {
+        output += character;
+      }
+    }
+    if (inSingleQuote || escaped) throw new Error('Teks produk di products.js tidak lengkap.');
+    return output
+      .replace(/([{,]\s*)([A-Za-z_$][\w$]*)(\s*:)/g, '$1"$2"$3')
+      .replace(/,\s*([}\]])/g, '$1');
   }
 
   async function connectGithub() {
