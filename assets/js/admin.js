@@ -1,11 +1,12 @@
 (() => {
-  const STORAGE_KEY = 'nagamasHonda.catalog.v1';
-  const categoryNames = {
-    matic: 'Matic',
-    bebek: 'Bebek',
-    sport: 'Sport',
-    listrik: 'Motor listrik'
+  const GITHUB_CONFIG = {
+    owner: 'nagamas-arista',
+    repo: 'Nagamas-Mojolaban',
+    branch: 'main'
   };
+  const GITHUB_FILE_PATH = 'assets/js/products.js';
+  const STORAGE_KEY = 'nagamasHonda.catalog.v1';
+  const categoryNames = { matic: 'Matic', bebek: 'Bebek', sport: 'Sport', listrik: 'Motor listrik' };
   const adminList = document.getElementById('adminList');
   const productDialog = document.getElementById('productDialog');
   const seriesDialog = document.getElementById('seriesDialog');
@@ -14,33 +15,43 @@
   const seriesSelect = document.getElementById('seriesSelect');
   const newSeriesFields = document.getElementById('newSeriesFields');
   const searchInput = document.getElementById('adminSearch');
-  let catalog = loadCatalog();
+  const githubState = document.getElementById('githubState');
+  const githubConnectButton = document.getElementById('githubConnect');
+  let catalog = [];
+  let catalogLoaded = false;
+  let githubToken = '';
+  let saveTimer = null;
+  let saveQueue = Promise.resolve();
+
+  function setGithubStatus(message, type = '') {
+    githubState.textContent = message;
+    githubState.className = `connection-state${type ? ` ${type}` : ''}`;
+  }
+
+  function configIsReady() {
+    return !GITHUB_CONFIG.owner.startsWith('GANTI_') &&
+      !GITHUB_CONFIG.repo.startsWith('GANTI_') &&
+      /^[A-Za-z0-9-]+$/.test(GITHUB_CONFIG.owner) &&
+      /^[A-Za-z0-9_.-]+$/.test(GITHUB_CONFIG.repo) &&
+      Boolean(GITHUB_CONFIG.branch);
+  }
 
   function copyDefaults() {
     return JSON.parse(JSON.stringify(window.NAGAMAS_PRODUCTS || []));
   }
 
-  function loadCatalog() {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      }
-    } catch (error) {
-      // The admin still works for this session if storage is blocked by the browser.
-    }
-    return copyDefaults();
-  }
-
-  function saveCatalog() {
+  function saveLocalCatalog() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(catalog));
-      document.getElementById('saveState').textContent = 'Tersimpan di browser';
     } catch (error) {
-      document.getElementById('saveState').textContent = 'Penyimpanan browser tidak tersedia — ekspor katalog sebelum menutup halaman.';
+      // GitHub remains the source of truth; local storage is only a convenience.
     }
+  }
+
+  function saveCatalog({ syncGithub = true } = {}) {
+    saveLocalCatalog();
     renderCatalog();
+    if (syncGithub) scheduleGithubSave();
   }
 
   function escapeHtml(value) {
@@ -53,54 +64,32 @@
     return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(amount);
   }
 
-  function updateMetrics() {
-    const variants = catalog.flatMap((series) => series.variants.map((variant) => ({ series, variant })));
-    const visibleProducts = variants.filter(({ series, variant }) => !series.hidden && !variant.hidden).length;
-    document.getElementById('activeCount').textContent = visibleProducts;
-    document.getElementById('seriesCount').textContent = catalog.length;
-    document.getElementById('hiddenCount').textContent = variants.length - visibleProducts;
-  }
-
   function renderCatalog() {
+    if (!catalogLoaded) {
+      adminList.innerHTML = '<div class="empty">Hubungkan GitHub untuk memuat produk toko.</div>';
+      return;
+    }
     const query = searchInput.value.trim().toLocaleLowerCase('id-ID');
     const matches = catalog.map((series, seriesIndex) => ({ series, seriesIndex })).filter(({ series }) => {
       const text = `${series.title} ${categoryNames[series.category] || series.category} ${series.variants.map((variant) => variant.name).join(' ')}`;
       return text.toLocaleLowerCase('id-ID').includes(query);
     });
-
-    updateMetrics();
     if (!matches.length) {
       adminList.innerHTML = '<div class="empty">Produk tidak ditemukan.</div>';
       return;
     }
-
     adminList.innerHTML = matches.map(({ series, seriesIndex }) => `
       <article class="series${series.hidden ? ' is-hidden' : ''}">
         <header class="series-head">
-          <div>
-            <h2 class="series-title">${escapeHtml(series.title)}</h2>
-            <div class="series-sub">${escapeHtml(categoryNames[series.category] || series.category)} · ${series.variants.length} tipe</div>
-          </div>
-          <div class="head-actions">
-            <span class="status ${series.hidden ? 'hidden' : 'active'}">${series.hidden ? 'Tersembunyi' : 'Tampil'}</span>
-            <button class="icon-button" type="button" data-action="edit-series" data-series="${seriesIndex}">Edit seri</button>
-            <button class="icon-button" type="button" data-action="toggle-series" data-series="${seriesIndex}">${series.hidden ? 'Tampilkan' : 'Sembunyikan'}</button>
-          </div>
+          <div><h2 class="series-title">${escapeHtml(series.title)}</h2><div class="series-sub">${escapeHtml(categoryNames[series.category] || series.category)} · ${series.variants.length} tipe</div></div>
+          <div class="head-actions"><span class="status${series.hidden ? ' hidden' : ''}">${series.hidden ? 'Tersembunyi' : 'Tampil'}</span><button class="icon-button" type="button" data-action="edit-series" data-series="${seriesIndex}">Edit seri</button><button class="icon-button" type="button" data-action="toggle-series" data-series="${seriesIndex}">${series.hidden ? 'Tampilkan' : 'Sembunyikan'}</button></div>
         </header>
-        <ul class="variants">
-          ${series.variants.map((variant, variantIndex) => `
-            <li class="variant${variant.hidden ? ' is-hidden' : ''}">
-              <span class="variant-name">${escapeHtml(variant.name)}${variant.hidden ? ' · tersembunyi' : ''}</span>
-              <strong class="variant-price">${formatPrice(variant.price)}</strong>
-              <div class="variant-actions">
-                <button class="icon-button" type="button" data-action="edit-product" data-series="${seriesIndex}" data-variant="${variantIndex}">Edit tipe</button>
-                <button class="icon-button" type="button" data-action="toggle-product" data-series="${seriesIndex}" data-variant="${variantIndex}">${variant.hidden ? 'Tampilkan' : 'Sembunyikan'}</button>
-              </div>
-            </li>
-          `).join('')}
+        <ul class="variants">${series.variants.map((variant, variantIndex) => `
+          <li class="variant${variant.hidden ? ' is-hidden' : ''}"><span class="variant-name">${escapeHtml(variant.name)}${variant.hidden ? ' · tersembunyi' : ''}</span><strong class="variant-price">${formatPrice(variant.price)}</strong>
+            <div class="variant-actions"><button class="icon-button" type="button" data-action="edit-product" data-series="${seriesIndex}" data-variant="${variantIndex}">Edit tipe</button><button class="icon-button" type="button" data-action="toggle-product" data-series="${seriesIndex}" data-variant="${variantIndex}">${variant.hidden ? 'Tampilkan' : 'Sembunyikan'}</button></div>
+          </li>`).join('')}
         </ul>
-      </article>
-    `).join('');
+      </article>`).join('');
   }
 
   function refreshSeriesOptions(selectedValue) {
@@ -119,6 +108,10 @@
   }
 
   function openAddProduct() {
+    if (!catalogLoaded) {
+      setGithubStatus('Hubungkan GitHub terlebih dahulu untuk memuat katalog.', 'error');
+      return;
+    }
     productForm.reset();
     seriesSelect.disabled = false;
     document.getElementById('editingSeriesIndex').value = '';
@@ -152,18 +145,116 @@
     seriesDialog.showModal();
   }
 
-  function downloadFile(filename, contents, mimeType) {
-    const file = new Blob([contents], { type: mimeType });
-    const url = URL.createObjectURL(file);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  async function githubRequest(url, token, options = {}) {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${token}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+        ...(options.headers || {})
+      }
+    });
+    const result = response.status === 204 ? null : await response.json().catch(() => null);
+    if (!response.ok) {
+      const detail = result && result.message ? result.message : `HTTP ${response.status}`;
+      throw new Error(`GitHub menolak permintaan: ${detail}`);
+    }
+    return result;
   }
 
+  function githubFileUrl() {
+    const path = GITHUB_FILE_PATH.split('/').map(encodeURIComponent).join('/');
+    return `https://api.github.com/repos/${encodeURIComponent(GITHUB_CONFIG.owner)}/${encodeURIComponent(GITHUB_CONFIG.repo)}/contents/${path}?ref=${encodeURIComponent(GITHUB_CONFIG.branch)}`;
+  }
+
+  function decodeCatalogFile(file) {
+    const binary = atob((file.content || '').replace(/\s/g, ''));
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const source = new TextDecoder().decode(bytes);
+    const match = source.match(/window\.NAGAMAS_PRODUCTS\s*=\s*([\s\S]*?);\s*$/);
+    if (!match) throw new Error('File products.js tidak memiliki format katalog yang dikenal.');
+    const parsed = JSON.parse(match[1]);
+    if (!Array.isArray(parsed) || parsed.some((series) => !series.title || !Array.isArray(series.variants))) {
+      throw new Error('Isi katalog di GitHub tidak valid.');
+    }
+    return parsed;
+  }
+
+  async function connectGithub() {
+    const tokenInput = document.getElementById('githubToken');
+    const token = tokenInput.value.trim();
+    if (!configIsReady()) {
+      setGithubStatus('Isi GITHUB_CONFIG di assets/js/admin.js dengan nama akun dan repository GitHub Anda.', 'error');
+      return;
+    }
+    if (!token) {
+      setGithubStatus('Tempel token GitHub terlebih dahulu.', 'error');
+      tokenInput.focus();
+      return;
+    }
+    githubConnectButton.disabled = true;
+    setGithubStatus('Menghubungkan dan memuat katalog…');
+    try {
+      const file = await githubRequest(githubFileUrl(), token);
+      catalog = decodeCatalogFile(file);
+      catalogLoaded = true;
+      githubToken = token;
+      tokenInput.value = '';
+      searchInput.hidden = false;
+      saveCatalog({ syncGithub: false });
+      setGithubStatus('Terhubung. Perubahan katalog akan disimpan otomatis ke GitHub.', 'success');
+    } catch (error) {
+      githubToken = '';
+      setGithubStatus(error.message, 'error');
+    } finally {
+      githubConnectButton.disabled = false;
+    }
+  }
+
+  function encodeBase64Utf8(value) {
+    const bytes = new TextEncoder().encode(value);
+    let binary = '';
+    for (let index = 0; index < bytes.length; index += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+    }
+    return btoa(binary);
+  }
+
+  async function commitSnapshot(snapshot) {
+    if (!githubToken || !catalogLoaded) return;
+    try {
+      setGithubStatus('Menyimpan perubahan ke GitHub…');
+      const url = githubFileUrl();
+      const currentFile = await githubRequest(url, githubToken);
+      const source = `/* Katalog produk Nagamas Honda. Dikelola dari halaman admin.html. */\nwindow.NAGAMAS_PRODUCTS = ${JSON.stringify(snapshot, null, 2)};\n`;
+      await githubRequest(url.split('?')[0], githubToken, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: 'Perbarui katalog produk Nagamas Honda',
+          content: encodeBase64Utf8(source),
+          sha: currentFile.sha,
+          branch: GITHUB_CONFIG.branch
+        })
+      });
+      setGithubStatus('Perubahan berhasil disimpan otomatis ke GitHub.', 'success');
+    } catch (error) {
+      setGithubStatus(`Perubahan ada di browser, tetapi gagal dikirim ke GitHub: ${error.message}`, 'error');
+    }
+  }
+
+  function scheduleGithubSave() {
+    if (!githubToken || !catalogLoaded) return;
+    window.clearTimeout(saveTimer);
+    setGithubStatus('Perubahan tersimpan sementara. Menyinkronkan ke GitHub…');
+    saveTimer = window.setTimeout(() => {
+      const snapshot = JSON.parse(JSON.stringify(catalog));
+      saveQueue = saveQueue.then(() => commitSnapshot(snapshot));
+    }, 700);
+  }
+
+  githubConnectButton.addEventListener('click', connectGithub);
   document.getElementById('addProductButton').addEventListener('click', openAddProduct);
   seriesSelect.addEventListener('change', toggleNewSeriesFields);
   searchInput.addEventListener('input', renderCatalog);
@@ -172,26 +263,16 @@
     event.preventDefault();
     const seriesIndexValue = document.getElementById('editingSeriesIndex').value;
     const variantIndexValue = document.getElementById('editingVariantIndex').value;
-    const product = {
-      name: document.getElementById('productName').value.trim(),
-      price: Number(document.getElementById('productPrice').value)
-    };
+    const product = { name: document.getElementById('productName').value.trim(), price: Number(document.getElementById('productPrice').value) };
     if (!product.name || !Number.isFinite(product.price) || product.price < 0) return;
-
     if (seriesIndexValue !== '' && variantIndexValue !== '') {
       const series = catalog[Number(seriesIndexValue)];
       series.variants[Number(variantIndexValue)] = { ...series.variants[Number(variantIndexValue)], ...product };
     } else if (seriesSelect.value === '__new__') {
-      catalog.push({
-        title: document.getElementById('newSeriesTitle').value.trim(),
-        category: document.getElementById('newSeriesCategory').value,
-        image: document.getElementById('newSeriesImage').value.trim(),
-        variants: [product]
-      });
+      catalog.push({ title: document.getElementById('newSeriesTitle').value.trim(), category: document.getElementById('newSeriesCategory').value, image: document.getElementById('newSeriesImage').value.trim(), variants: [product] });
     } else {
       catalog[Number(seriesSelect.value)].variants.push(product);
     }
-
     seriesSelect.disabled = false;
     productDialog.close();
     saveCatalog();
@@ -200,12 +281,7 @@
   seriesForm.addEventListener('submit', (event) => {
     event.preventDefault();
     const index = Number(document.getElementById('seriesIndex').value);
-    catalog[index] = {
-      ...catalog[index],
-      title: document.getElementById('seriesTitle').value.trim(),
-      category: document.getElementById('seriesCategory').value,
-      image: document.getElementById('seriesImage').value.trim()
-    };
+    catalog[index] = { ...catalog[index], title: document.getElementById('seriesTitle').value.trim(), category: document.getElementById('seriesCategory').value, image: document.getElementById('seriesImage').value.trim() };
     seriesDialog.close();
     saveCatalog();
   });
@@ -216,7 +292,6 @@
     const seriesIndex = Number(button.dataset.series);
     const variantIndex = Number(button.dataset.variant);
     const series = catalog[seriesIndex];
-
     if (button.dataset.action === 'edit-product') openEditProduct(seriesIndex, variantIndex);
     if (button.dataset.action === 'edit-series') openEditSeries(seriesIndex);
     if (button.dataset.action === 'toggle-product') {
@@ -231,34 +306,6 @@
 
   document.querySelectorAll('[data-close]').forEach((button) => {
     button.addEventListener('click', () => document.getElementById(button.dataset.close).close());
-  });
-
-  document.getElementById('exportButton').addEventListener('click', () => {
-    const source = `/* Katalog produk Nagamas Honda. Dikelola dari halaman admin.html. */\nwindow.NAGAMAS_PRODUCTS = ${JSON.stringify(catalog, null, 2)};\n`;
-    downloadFile('products.js', source, 'text/javascript;charset=utf-8');
-  });
-
-  document.getElementById('backupButton').addEventListener('click', () => {
-    downloadFile('nagamas-katalog-backup.json', JSON.stringify(catalog, null, 2), 'application/json;charset=utf-8');
-  });
-
-  document.getElementById('importButton').addEventListener('click', () => document.getElementById('importFile').click());
-  document.getElementById('importFile').addEventListener('change', async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-    try {
-      const imported = JSON.parse(await file.text());
-      if (!Array.isArray(imported) || imported.some((series) => !series.title || !Array.isArray(series.variants))) {
-        throw new Error('Bentuk file katalog tidak sesuai.');
-      }
-      if (!window.confirm('Impor ini akan mengganti katalog yang tersimpan di browser. Lanjutkan?')) return;
-      catalog = imported;
-      saveCatalog();
-    } catch (error) {
-      window.alert('File tidak dapat dibaca. Gunakan file cadangan JSON dari halaman admin.');
-    } finally {
-      event.target.value = '';
-    }
   });
 
   renderCatalog();
