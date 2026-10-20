@@ -6,6 +6,8 @@ Buka `admin.html` untuk menambah produk, mengedit tipe/harga, menyembunyikan ata
 
 Konfigurasi `GITHUB_CONFIG` pada bagian atas `assets/js/admin.js` sudah diisi untuk repository `nagamas-arista/Nagamas-Mojolaban` dengan branch `main`. Setelah mengunggah website, cukup tempel fine-grained token ke admin dan pilih **Hubungkan & muat produk**. Setiap perubahan produk, harga, foto, atau status tampil akan otomatis membuat commit baru yang memperbarui `assets/js/products.js`. GitHub Pages kemudian membangun ulang website.
 
+Untuk mengganti foto seri, pilih **Edit seri**, pilih file JPG, PNG, atau WebP (maksimal 5 MB), lalu simpan. Foto diunggah ke `assets/series/` di GitHub dan katalog otomatis diarahkan ke foto tersebut. Jika hanya mengubah kolom alamat foto tanpa memilih berkas, file gambarnya harus sudah ada di repository.
+
 Untuk token, batasi aksesnya ke repository website ini saja dan beri izin **Contents: Read and write**. Token hanya disimpan di memori halaman admin, tidak di file situs maupun browser storage. Tutup atau muat ulang halaman admin untuk menghapus token dari sesi. Gunakan admin melalui HTTPS. Jangan bagikan token atau memasukkannya ke file kode.
 
 Halaman admin belum memakai login. Siapa pun dapat membuka dan mengubah tampilan admin di browser mereka sendiri, tetapi hanya pemegang token yang dapat menyimpan ke repository. Jangan membagikan token kepada orang lain. Untuk penggunaan beberapa admin, tambahkan autentikasi/backend khusus.

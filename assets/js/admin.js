@@ -158,13 +158,15 @@
     const result = response.status === 204 ? null : await response.json().catch(() => null);
     if (!response.ok) {
       const detail = result && result.message ? result.message : `HTTP ${response.status}`;
-      throw new Error(`GitHub menolak permintaan: ${detail}`);
+      const error = new Error(`GitHub menolak permintaan: ${detail}`);
+      error.status = response.status;
+      throw error;
     }
     return result;
   }
 
-  function githubFileUrl() {
-    const path = GITHUB_FILE_PATH.split('/').map(encodeURIComponent).join('/');
+  function githubFileUrl(filePath = GITHUB_FILE_PATH) {
+    const path = filePath.split('/').map(encodeURIComponent).join('/');
     return `https://api.github.com/repos/${encodeURIComponent(GITHUB_CONFIG.owner)}/${encodeURIComponent(GITHUB_CONFIG.repo)}/contents/${path}?ref=${encodeURIComponent(GITHUB_CONFIG.branch)}`;
   }
 
@@ -318,12 +320,46 @@
   }
 
   function encodeBase64Utf8(value) {
-    const bytes = new TextEncoder().encode(value);
+    return encodeBase64Bytes(new TextEncoder().encode(value));
+  }
+
+  function encodeBase64Bytes(bytes) {
     let binary = '';
     for (let index = 0; index < bytes.length; index += 0x8000) {
       binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
     }
     return btoa(binary);
+  }
+
+  async function uploadSeriesPhoto(file, seriesTitle) {
+    if (!githubToken) throw new Error('Hubungkan GitHub terlebih dahulu sebelum mengunggah foto.');
+    const extensions = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+    const extension = extensions[file.type];
+    if (!extension) throw new Error('Gunakan foto JPG, PNG, atau WebP.');
+    if (file.size > 5 * 1024 * 1024) throw new Error('Ukuran foto maksimal 5 MB.');
+    const slug = seriesTitle.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'seri-motor';
+    const relativePath = `assets/series/${slug}.${extension}`;
+    const url = githubFileUrl(relativePath);
+    let sha;
+    try {
+      const existingFile = await githubRequest(url, githubToken);
+      sha = existingFile.sha;
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
+    const content = encodeBase64Bytes(new Uint8Array(await file.arrayBuffer()));
+    const body = {
+      message: `Perbarui foto seri ${seriesTitle}`,
+      content,
+      branch: GITHUB_CONFIG.branch
+    };
+    if (sha) body.sha = sha;
+    await githubRequest(url.split('?')[0], githubToken, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    return relativePath;
   }
 
   async function commitSnapshot(snapshot) {
@@ -383,12 +419,32 @@
     saveCatalog();
   });
 
-  seriesForm.addEventListener('submit', (event) => {
+  seriesForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     const index = Number(document.getElementById('seriesIndex').value);
-    catalog[index] = { ...catalog[index], title: document.getElementById('seriesTitle').value.trim(), category: document.getElementById('seriesCategory').value, image: document.getElementById('seriesImage').value.trim() };
-    seriesDialog.close();
-    saveCatalog();
+    const title = document.getElementById('seriesTitle').value.trim();
+    const photoInput = document.getElementById('seriesPhoto');
+    const photoStatus = document.getElementById('seriesPhotoStatus');
+    const submitButton = seriesForm.querySelector('button[type="submit"]');
+    const photo = photoInput.files[0];
+    submitButton.disabled = true;
+    try {
+      let image = document.getElementById('seriesImage').value.trim();
+      if (photo) {
+        photoStatus.textContent = 'Mengunggah foto ke GitHub…';
+        image = await uploadSeriesPhoto(photo, title);
+      }
+      catalog[index] = { ...catalog[index], title, category: document.getElementById('seriesCategory').value, image };
+      seriesDialog.close();
+      saveCatalog();
+      if (photo) setGithubStatus('Foto terunggah. Alamat foto dan katalog sedang disimpan ke GitHub…');
+    } catch (error) {
+      photoStatus.textContent = error.message;
+      setGithubStatus(error.message, 'error');
+    } finally {
+      submitButton.disabled = false;
+      photoInput.value = '';
+    }
   });
 
   adminList.addEventListener('click', (event) => {
