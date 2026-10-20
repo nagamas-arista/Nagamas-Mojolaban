@@ -179,7 +179,7 @@
       parsed = JSON.parse(match[1]);
     } catch (jsonError) {
       // Katalog versi awal memakai object literal JavaScript (single quotes dan key tanpa kutip).
-      parsed = JSON.parse(legacyCatalogToJson(match[1]));
+      parsed = parseLegacyCatalog(match[1]);
     }
     if (!Array.isArray(parsed) || parsed.some((series) => !series.title || !Array.isArray(series.variants))) {
       throw new Error('Isi katalog di GitHub tidak valid.');
@@ -187,42 +187,103 @@
     return parsed;
   }
 
-  function legacyCatalogToJson(value) {
-    let output = '';
-    let inSingleQuote = false;
-    let escaped = false;
-    for (let index = 0; index < value.length; index += 1) {
-      const character = value[index];
-      if (!inSingleQuote) {
-        if (character === "'") {
-          inSingleQuote = true;
-          output += '"';
-        } else {
-          output += character;
+  function parseLegacyCatalog(source) {
+    let cursor = 0;
+    const skipSpace = () => {
+      while (/\s/.test(source[cursor] || '')) cursor += 1;
+    };
+    const parseString = () => {
+      const quote = source[cursor++];
+      let result = '';
+      while (cursor < source.length) {
+        const character = source[cursor++];
+        if (character === quote) return result;
+        if (character !== '\\') {
+          result += character;
+          continue;
         }
-        continue;
+        const escaped = source[cursor++];
+        const escapes = { n: '\n', r: '\r', t: '\t', b: '\b', f: '\f', v: '\v', '0': '\0' };
+        if (escaped === 'u') {
+          const hex = source.slice(cursor, cursor + 4);
+          if (!/^[\da-f]{4}$/i.test(hex)) throw new Error('Teks produk memiliki escape Unicode yang tidak valid.');
+          result += String.fromCharCode(parseInt(hex, 16));
+          cursor += 4;
+        } else if (escaped === 'x') {
+          const hex = source.slice(cursor, cursor + 2);
+          if (!/^[\da-f]{2}$/i.test(hex)) throw new Error('Teks produk memiliki escape yang tidak valid.');
+          result += String.fromCharCode(parseInt(hex, 16));
+          cursor += 2;
+        } else {
+          result += Object.prototype.hasOwnProperty.call(escapes, escaped) ? escapes[escaped] : escaped;
+        }
       }
-      if (escaped) {
-        if (character === "'") output += "'";
-        else if (character === '"') output += '\\"';
-        else if (character === '\\') output += '\\\\';
-        else output += `\\${character}`;
-        escaped = false;
-      } else if (character === '\\') {
-        escaped = true;
-      } else if (character === "'") {
-        inSingleQuote = false;
-        output += '"';
-      } else if (character === '"') {
-        output += '\\"';
-      } else {
-        output += character;
+      throw new Error('Teks produk di products.js tidak lengkap.');
+    };
+    const parseValue = () => {
+      skipSpace();
+      const character = source[cursor];
+      if (character === '[') {
+        cursor += 1;
+        const array = [];
+        skipSpace();
+        while (source[cursor] !== ']') {
+          if (cursor >= source.length) throw new Error('Daftar produk di products.js tidak lengkap.');
+          array.push(parseValue());
+          skipSpace();
+          if (source[cursor] === ',') {
+            cursor += 1;
+            skipSpace();
+            if (source[cursor] === ']') break;
+          } else if (source[cursor] !== ']') {
+            throw new Error('Format daftar produk di products.js tidak valid.');
+          }
+        }
+        cursor += 1;
+        return array;
       }
-    }
-    if (inSingleQuote || escaped) throw new Error('Teks produk di products.js tidak lengkap.');
-    return output
-      .replace(/([{,]\s*)([A-Za-z_$][\w$]*)(\s*:)/g, '$1"$2"$3')
-      .replace(/,\s*([}\]])/g, '$1');
+      if (character === '{') {
+        cursor += 1;
+        const object = {};
+        skipSpace();
+        while (source[cursor] !== '}') {
+          if (cursor >= source.length) throw new Error('Data seri di products.js tidak lengkap.');
+          const quotedKey = source[cursor] === "'" || source[cursor] === '"';
+          const key = quotedKey ? parseString() : (source.slice(cursor).match(/^[A-Za-z_$][\w$]*/) || [])[0];
+          if (!key) throw new Error('Nama kolom dalam products.js tidak valid.');
+          if (!quotedKey) cursor += key.length;
+          skipSpace();
+          if (source[cursor++] !== ':') throw new Error('Tanda titik dua hilang pada products.js.');
+          object[key] = parseValue();
+          skipSpace();
+          if (source[cursor] === ',') {
+            cursor += 1;
+            skipSpace();
+            if (source[cursor] === '}') break;
+          } else if (source[cursor] !== '}') {
+            throw new Error('Format data seri di products.js tidak valid.');
+          }
+        }
+        cursor += 1;
+        return object;
+      }
+      if (character === "'" || character === '"') return parseString();
+      const number = source.slice(cursor).match(/^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/);
+      if (number) {
+        cursor += number[0].length;
+        return Number(number[0]);
+      }
+      const literal = source.slice(cursor).match(/^(true|false|null)\b/);
+      if (literal) {
+        cursor += literal[0].length;
+        return literal[0] === 'true' ? true : literal[0] === 'false' ? false : null;
+      }
+      throw new Error('Format nilai dalam products.js tidak dikenal.');
+    };
+    const parsed = parseValue();
+    skipSpace();
+    if (cursor !== source.length) throw new Error('Ada karakter tambahan setelah daftar produk.');
+    return parsed;
   }
 
   async function connectGithub() {
