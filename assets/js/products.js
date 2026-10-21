@@ -33,7 +33,7 @@ window.NAGAMAS_PRODUCTS = [
   {
     "title": "Supra GTR 150 Series",
     "category": "bebek",
-    "image": "assets/series/supra-gtr-150.jpg",
+    "image": "assets/series/supra-gtr-150-series.jpg",
     "variants": [
       {
         "name": "Supra GTR 150 Sporty",
