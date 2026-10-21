@@ -3,7 +3,7 @@ window.NAGAMAS_PRODUCTS = [
   {
     "title": "Revo Series",
     "category": "bebek",
-    "image": "assets/series/revo.jpg",
+    "image": "assets/series/revo-series.jpg",
     "variants": [
       {
         "name": "Revo Fit",
