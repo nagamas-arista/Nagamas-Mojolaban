@@ -18,7 +18,7 @@ window.NAGAMAS_PRODUCTS = [
   {
     "title": "Supra X 125 Series",
     "category": "bebek",
-    "image": "assets/series/supra-x-125-series.webp",
+    "image": "assets/series/supra-x-125-series.jpg",
     "variants": [
       {
         "name": "Supra X 125 Spoke",
