@@ -81,7 +81,7 @@
     adminList.innerHTML = matches.map(({ series, seriesIndex }) => `
       <article class="series${series.hidden ? ' is-hidden' : ''}">
         <header class="series-head">
-          <div><h2 class="series-title">${escapeHtml(series.title)}</h2><div class="series-sub">${escapeHtml(categoryNames[series.category] || series.category)} · ${series.variants.length} tipe</div></div>
+          <div class="series-heading"><img class="series-preview" src="${escapeHtml(series.image || 'assets/series/beat.png')}" alt="Foto ${escapeHtml(series.title)}" loading="lazy"><div><h2 class="series-title">${escapeHtml(series.title)}</h2><div class="series-sub">${escapeHtml(categoryNames[series.category] || series.category)} · ${series.variants.length} tipe</div></div></div>
           <div class="head-actions"><span class="status${series.hidden ? ' hidden' : ''}">${series.hidden ? 'Tersembunyi' : 'Tampil'}</span><button class="icon-button" type="button" data-action="edit-series" data-series="${seriesIndex}">Edit seri</button><button class="icon-button" type="button" data-action="toggle-series" data-series="${seriesIndex}">${series.hidden ? 'Tampilkan' : 'Sembunyikan'}</button></div>
         </header>
         <ul class="variants">${series.variants.map((variant, variantIndex) => `
@@ -113,6 +113,7 @@
       return;
     }
     productForm.reset();
+    document.getElementById('productPhotoStatus').textContent = 'Foto ini dipakai untuk seri yang dipilih · JPG, PNG, WebP · maksimum 5 MB.';
     seriesSelect.disabled = false;
     document.getElementById('editingSeriesIndex').value = '';
     document.getElementById('editingVariantIndex').value = '';
@@ -125,6 +126,7 @@
     const series = catalog[seriesIndex];
     const variant = series.variants[variantIndex];
     productForm.reset();
+    document.getElementById('productPhotoStatus').textContent = 'Unggah foto baru jika ingin mengganti foto seri ini · maksimum 5 MB.';
     seriesSelect.disabled = false;
     document.getElementById('editingSeriesIndex').value = seriesIndex;
     document.getElementById('editingVariantIndex').value = variantIndex;
@@ -400,23 +402,53 @@
   seriesSelect.addEventListener('change', toggleNewSeriesFields);
   searchInput.addEventListener('input', renderCatalog);
 
-  productForm.addEventListener('submit', (event) => {
+  productForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     const seriesIndexValue = document.getElementById('editingSeriesIndex').value;
     const variantIndexValue = document.getElementById('editingVariantIndex').value;
     const product = { name: document.getElementById('productName').value.trim(), price: Number(document.getElementById('productPrice').value) };
     if (!product.name || !Number.isFinite(product.price) || product.price < 0) return;
-    if (seriesIndexValue !== '' && variantIndexValue !== '') {
-      const series = catalog[Number(seriesIndexValue)];
-      series.variants[Number(variantIndexValue)] = { ...series.variants[Number(variantIndexValue)], ...product };
-    } else if (seriesSelect.value === '__new__') {
-      catalog.push({ title: document.getElementById('newSeriesTitle').value.trim(), category: document.getElementById('newSeriesCategory').value, image: document.getElementById('newSeriesImage').value.trim(), variants: [product] });
-    } else {
-      catalog[Number(seriesSelect.value)].variants.push(product);
+    const photoInput = document.getElementById('productPhoto');
+    const photoStatus = document.getElementById('productPhotoStatus');
+    const submitButton = productForm.querySelector('button[type="submit"]');
+    const photo = photoInput.files[0];
+    const isEditing = seriesIndexValue !== '' && variantIndexValue !== '';
+    const isNewSeries = !isEditing && seriesSelect.value === '__new__';
+    const targetSeriesIndex = isEditing ? Number(seriesIndexValue) : Number(seriesSelect.value);
+    const targetSeriesTitle = isNewSeries
+      ? document.getElementById('newSeriesTitle').value.trim()
+      : catalog[targetSeriesIndex]?.title;
+    submitButton.disabled = true;
+    try {
+      if (photo) photoStatus.textContent = 'Mengunggah foto seri ke GitHub…';
+      const uploadedImage = photo ? await uploadSeriesPhoto(photo, targetSeriesTitle) : '';
+      if (isEditing) {
+        const series = catalog[targetSeriesIndex];
+        series.variants[Number(variantIndexValue)] = { ...series.variants[Number(variantIndexValue)], ...product };
+        if (uploadedImage) series.image = uploadedImage;
+      } else if (isNewSeries) {
+        catalog.push({
+          title: targetSeriesTitle,
+          category: document.getElementById('newSeriesCategory').value,
+          image: uploadedImage || document.getElementById('newSeriesImage').value.trim(),
+          variants: [product]
+        });
+      } else {
+        const series = catalog[targetSeriesIndex];
+        series.variants.push(product);
+        if (uploadedImage) series.image = uploadedImage;
+      }
+      seriesSelect.disabled = false;
+      productDialog.close();
+      saveCatalog();
+      if (photo) setGithubStatus('Foto berhasil diunggah. Katalog sedang disinkronkan ke GitHub…');
+    } catch (error) {
+      photoStatus.textContent = error.message;
+      setGithubStatus(error.message, 'error');
+    } finally {
+      submitButton.disabled = false;
+      photoInput.value = '';
     }
-    seriesSelect.disabled = false;
-    productDialog.close();
-    saveCatalog();
   });
 
   seriesForm.addEventListener('submit', async (event) => {
